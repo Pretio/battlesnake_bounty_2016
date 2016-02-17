@@ -17,7 +17,10 @@ class Snake(object):
         board = generate_board(payload)
         snake = self.get_snake(snakes)
 
-        strategy = choose_strategy(turn, board, snake, snakes, food)
+        strategy = choose_strategy(
+            turn=turn, board=board,
+            snakes=snakes, snake=snake, food=food)
+
         result = strategy.get_action()
 
         if isinstance(result, tuple):
