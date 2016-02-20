@@ -26,7 +26,7 @@ def debug_response(response):
 
 @app.route('/')
 def whois():
-    head_url = url_for('static', filename='chicken.jpg', _external=True)
+    head_url = url_for('static', filename='chick.gif', _external=True)
     return jsonify({
         'color': '#FFFFFF',
         'head': head_url,
