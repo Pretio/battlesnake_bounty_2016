@@ -78,16 +78,15 @@ def generate_board(payload):
         for x in range(width)
     ]
 
-    for coord in payload['food']:
+    for coord in payload.get('food', []):
         board[coord[0]][coord[1]]['state'] = Constants.FOOD
 
-    for snake in payload['snakes']:
+    for snake in payload.get('snakes', []):
         for i, coord in enumerate(snake['coords']):
             if i == 0:
                 board[coord[0]][coord[1]]['state'] = 'head'
             else:
                 board[coord[0]][coord[1]]['state'] = 'body'
-            board[coord[0]][coord[1]]['snake'] = snake['name']
 
     return board
 
@@ -98,6 +97,9 @@ def dimensions(board):
 
 def adjacent(a, b):
     return abs(a[0] - b[0]) + abs(a[1] - b[1]) == 1
+
+def diagonal(a, b):
+    return manhattan_dist(a, b) == 2 and a[0] != b[0] and a[1] != b[1]
 
 def manhattan_dist(pos1, pos2):
     return (abs(pos1[0] - pos2[0]) + abs(pos1[1] - pos2[1]))
@@ -151,14 +153,16 @@ def choose_strategy(turn, board, snakes, snake, food):
 
     print 'STRATEGY:', strategy.__name__
 
-    return strategy(turn, head, health, board, snakes, food)
+    return strategy(position=head, board=board, snakes=snakes, food=food)
 
 
 class BaseStrategy(object):
-    def __init__(self, turn, position, health, board, snakes, food):
-        self.turn = turn
+    def __init__(self, position, board, snakes=None, food=None):
+        if snakes is None:
+            snakes = []
+        if food is None:
+            food = []
         self.position = position
-        self.health = health
         self.board = board
         self.num_columns, self.num_rows = dimensions(self.board)
         self.snakes = [
@@ -266,59 +270,67 @@ class FindCornerStrategy(BaseStrategy):
             (0, 0), (self.num_columns - 1, 0), (0, self.num_rows - 1), (self.num_columns - 1, self.num_rows - 1)
         )
 
-    def get_closest_corners(self, board, position):
+    def get_closest_corners(self):
         corners = self.get_corners()
 
-        safe_corners = filter(self.corner_is_safe, corners)
-
-        return sorted(safe_corners, key=lambda corner:
-            manhattan_dist(position, corner)
+        sorted_corners = sorted(corners, key=lambda corner:
+            manhattan_dist(self.position, corner)
         )
 
-    def corner_is_safe(self, corner):
+        return sorted_corners
+
+    def corner_is_safe(self, corner, allowed_tiles=[Constants.EMPTY]):
         # a corner is only safe if it's completely empty and there are no
         # snakes able to move into it next turn
-        safe, contents = self.check_tile(corner[0], corner[1], allowed_tiles=[Constants.EMPTY])
+        safe, contents = self.check_tile(corner[0], corner[1], allowed_tiles=allowed_tiles)
         return safe
 
     def get_action(self):
         empty = self.safe_directions(allowed_tiles=[Constants.EMPTY])
+        empty_directions = [direction for direction, contents in empty]
         corners = self.get_corners()
 
         x, y = self.position
 
+        print 'Empty directions:', empty_directions
+
         # try to move towards the closest empty corner
-        for closest_corner in self.get_closest_corners(self.board, self.position):
+        for closest_corner in self.get_closest_corners():
             cx, cy = closest_corner
 
-            print 'Looking for moves to safe corner:', (cx, cy)
+            distance_to_corner = manhattan_dist(closest_corner, self.position)
 
-            # FIXME: this doesn't quite work, because we aren't considering
-            # the current corner as safe...
+            print 'Checking moves to corner:', closest_corner, 'pos:', self.position, 'dist:', distance_to_corner
 
-            if adjacent(self.position, closest_corner):
+            # If we're adjacent to a corner, we don't need to worry about it being behind us
+            if adjacent(self.position, closest_corner) or self.position == closest_corner:
+                print 'Staying in corner:', closest_corner, 'pos:', self.position
+
+                # (0, 0), (columns - 1, 0), (0, rows - 1), (columns - 1, rows - 1)
+
                 # stay in corner, gross logic
                 if closest_corner == corners[0]:
-                    if x > cx and Constants.DOWN in empty:
+                    if x > cx and Constants.DOWN in empty_directions:
                         return Constants.DOWN
-                    if y > cy and Constants.RIGHT in empty:
+                    if y > cy and Constants.RIGHT in empty_directions:
                         return Constants.RIGHT
                 if closest_corner == corners[1]:
-                    if x < cx and Constants.DOWN in empty:
+                    if x < cx and Constants.DOWN in empty_directions:
                         return Constants.DOWN
-                    if y > cy and Constants.LEFT in empty:
+                    if y > cy and Constants.LEFT in empty_directions:
                         return Constants.LEFT
                 if closest_corner == corners[2]:
-                    if x > cx and Constants.UP in empty:
+                    if x > cx and Constants.UP in empty_directions:
                         return Constants.UP
-                    if y < cy and Constants.RIGHT in empty:
+                    if y < cy and Constants.RIGHT in empty_directions:
                         return Constants.RIGHT
                 if closest_corner == corners[3]:
-                    if x < cx and Constants.UP in empty:
+                    if x < cx and Constants.UP in empty_directions:
                         return Constants.UP
-                    if y < cy and Constants.LEFT in empty:
+                    if y < cy and Constants.LEFT in empty_directions:
                         return Constants.LEFT
 
+            print 'Moving toward corner'
             for direction, contents in empty:
                 if direction == Constants.LEFT and cx < x:
                     return direction
@@ -329,52 +341,10 @@ class FindCornerStrategy(BaseStrategy):
                 if direction == Constants.DOWN and cy > y:
                     return direction
 
+                # TODO: this doesn't account for a corner directly behind the snake
+
         # if we get here, we can't move toward any empty corner, just move randomly
         print "Can't move toward any corner!"
-        direction, contents = random.choice(self.safe_directions())
-        return direction
-
-
-class StayInCornerStrategy(FindCornerStrategy):
-    """
-    Stay in the current corner.
-
-    This strategy is only safe to use if within safe_square_size(snake.length)
-    squares of the nearest corner.
-    """
-    def get_action(self):
-        x, y = self.position
-
-        corners = self.get_corners()
-        empty = self.safe_directions(allowed_tiles=[Constants.EMPTY])
-
-        for closest_corner in self.get_closest_corners(self.board, self.position):
-            cx, cy = closest_corner
-
-            if adjacent(self.position, closest_corner):
-                # stay in corner, gross logic
-                if closest_corner == corners[0]:
-                    if x > cx and Constants.DOWN in empty:
-                        return Constants.DOWN
-                    if y > cy and Constants.RIGHT in empty:
-                        return Constants.RIGHT
-                if closest_corner == corners[1]:
-                    if x < cx and Constants.DOWN in empty:
-                        return Constants.DOWN
-                    if y > cy and Constants.LEFT in empty:
-                        return Constants.LEFT
-                if closest_corner == corners[2]:
-                    if x > cx and Constants.UP in empty:
-                        return Constants.UP
-                    if y < cy and Constants.RIGHT in empty:
-                        return Constants.RIGHT
-                if closest_corner == corners[3]:
-                    if x < cx and Constants.UP in empty:
-                        return Constants.UP
-                    if y < cy and Constants.LEFT in empty:
-                        return Constants.LEFT
-
-        # if we get here, we can't stay in the corner, just move randomly
         direction, contents = random.choice(self.safe_directions())
         return direction
 
@@ -383,11 +353,11 @@ class FoodHuntingStrategy(BaseStrategy):
     """
     Move towards the nearest safe food, if there is a safe move in that direction.
     """
-    def get_closest_food(self, board, position):
+    def get_closest_food(self):
         safe_food = filter(self.food_is_safe, self.food)
 
         return sorted(safe_food, key=lambda food:
-            manhattan_dist(position, food)
+            manhattan_dist(self.position, food)
         )
 
     def food_is_safe(self, food):
@@ -400,7 +370,7 @@ class FoodHuntingStrategy(BaseStrategy):
         x, y = self.position
 
         # try to move towards the closest food
-        for closest_food in self.get_closest_food(self.board, self.position):
+        for closest_food in self.get_closest_food():
             cx, cy = closest_food
 
             print 'Looking for moves to safe food:', (cx, cy)
